@@ -11,6 +11,12 @@ from pathlib import Path
 import sys
 import os
 
+REQUIRED_TELEMETRY_COLUMNS = [
+    "Power_On_Hours", "Total_TBW_TB", "Total_TBR_TB", "Temperature_C",
+    "Percent_Life_Used", "Media_Errors", "Unsafe_Shutdowns", "CRC_Errors",
+    "Read_Error_Rate", "Write_Error_Rate", "SMART_Warning_Flag",
+]
+
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
@@ -50,35 +56,107 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ─── Load Data ───────────────────────────────────────────────────
-@st.cache_data
-def load_data():
-    from data_processing import load_and_clean, prepare_features, scale_features
+def _prepare_uploaded_dataframe(df):
+    """Validate and normalize uploaded CSV for analysis."""
+    from data_generator import FAILURE_MODE_MAP
+
+    out = df.copy()
+    out.columns = [str(c).strip() for c in out.columns]
+
+    missing = [c for c in REQUIRED_TELEMETRY_COLUMNS if c not in out.columns]
+    if missing:
+        raise ValueError(f"Missing required columns: {', '.join(missing)}")
+
+    for col in REQUIRED_TELEMETRY_COLUMNS:
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+    out[REQUIRED_TELEMETRY_COLUMNS] = out[REQUIRED_TELEMETRY_COLUMNS].fillna(
+        out[REQUIRED_TELEMETRY_COLUMNS].median(numeric_only=True)
+    )
+
+    if "Drive_ID" not in out.columns:
+        out["Drive_ID"] = [f"UPLOAD-{i:05d}" for i in range(len(out))]
+    if "Vendor" not in out.columns:
+        out["Vendor"] = "Uploaded"
+    if "Model" not in out.columns:
+        out["Model"] = "Unknown"
+    if "Firmware_Version" not in out.columns:
+        out["Firmware_Version"] = "Unknown"
+    if "Failure_Mode" not in out.columns:
+        out["Failure_Mode"] = 0
+    if "Failure_Mode_Label" not in out.columns:
+        out["Failure_Mode_Label"] = out["Failure_Mode"].map(FAILURE_MODE_MAP).fillna("Unknown")
+
+    if "Failure_Flag" in out.columns:
+        out["Failure_Flag"] = pd.to_numeric(out["Failure_Flag"], errors="coerce").fillna(0).astype(int)
+
+    return out
+
+
+def _run_pipeline(analysis_df, training_df):
+    """Train on training_df and analyze analysis_df."""
+    from data_processing import prepare_features, scale_features
     from ml_model import split_data, train_random_forest, predict_failure_probability
     from intelligence_engine import analyze_all_drives
-    
-    df = load_and_clean("data/nvme_dataset.csv")
-    X, y, feature_names = prepare_features(df)
+
+    X, y, feature_names = prepare_features(training_df)
     X_train, X_test, y_train, y_test = split_data(X, y)
     X_train_scaled, X_test_scaled, scaler = scale_features(X_train, X_test)
     model = train_random_forest(X_train_scaled, y_train)
 
-    # Score all drives so downstream pages can analyze full-fleet risk.
-    X_all_scaled = pd.DataFrame(
-        scaler.transform(X),
-        columns=X.columns,
-        index=X.index,
+    # Score all rows from the selected analysis dataset.
+    X_analysis = analysis_df[feature_names].copy()
+    X_analysis_scaled = pd.DataFrame(
+        scaler.transform(X_analysis),
+        columns=X_analysis.columns,
+        index=X_analysis.index,
     )
-    failure_probs = predict_failure_probability(model, X_all_scaled)
-    health_scores = analyze_all_drives(df, failure_probs)
+    failure_probs = predict_failure_probability(model, X_analysis_scaled)
+    health_scores = analyze_all_drives(analysis_df, failure_probs)
 
-    return df, model, X_test_scaled, y_test, health_scores, feature_names
+    return analysis_df, model, X_test_scaled, y_test, health_scores, feature_names
+
+
+@st.cache_data
+def load_data():
+    from data_processing import load_and_clean
+
+    df = load_and_clean("data/nvme_dataset.csv")
+    return _run_pipeline(df, df)
+
+
+def load_uploaded_data(uploaded_file):
+    """Analyze uploaded CSV; train on uploaded labels if available, else fallback training set."""
+    from data_processing import load_and_clean
+
+    uploaded_df = _prepare_uploaded_dataframe(pd.read_csv(uploaded_file))
+
+    has_labels = "Failure_Flag" in uploaded_df.columns and uploaded_df["Failure_Flag"].nunique() > 1
+    if has_labels:
+        return _run_pipeline(uploaded_df, uploaded_df), "Uploaded CSV (trained on uploaded labels)"
+
+    reference_df = load_and_clean("data/nvme_dataset.csv")
+    return _run_pipeline(uploaded_df, reference_df), "Uploaded CSV (analyzed with reference-trained model)"
 
 # ─── Page Title ───────────────────────────────────────────────────
 st.title("🎯 NVMe Drive Health Intelligence Dashboard")
 st.markdown("**Real-time Predictive Failure Analysis & Health Scoring**")
 
-# Load data
-df, model, X_test, y_test, health_scores, features = load_data()
+# Upload dataset option
+st.sidebar.markdown("### 📁 Data Source")
+uploaded_file = st.sidebar.file_uploader("Upload CSV to analyze", type=["csv"])
+
+if uploaded_file is not None:
+    try:
+        (df, model, X_test, y_test, health_scores, features), data_source = load_uploaded_data(uploaded_file)
+        st.sidebar.success(f"Loaded: {uploaded_file.name}")
+    except Exception as exc:
+        st.sidebar.error(f"Could not analyze uploaded CSV: {exc}")
+        st.stop()
+else:
+    df, model, X_test, y_test, health_scores, features = load_data()
+    data_source = "Default dataset"
+
+st.caption(f"Data source: {data_source}")
 
 # ─── Sidebar Navigation ───────────────────────────────────────────
 page = st.sidebar.radio("📊 Navigation", [
@@ -97,7 +175,7 @@ if page == "Overview":
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("Total Drives", f"{len(df):,}", "10,000 NVMe")
+        st.metric("Total Drives", f"{len(df):,}", "Selected dataset")
     
     with col2:
         healthy_count = len(health_scores[health_scores['status'] == 'Healthy'])
