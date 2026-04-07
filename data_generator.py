@@ -70,7 +70,7 @@ def load_dataset(filepath="data/nvme_dataset.csv"):
     # Add human-readable failure mode label
     df["Failure_Mode_Label"] = df["Failure_Mode"].map(FAILURE_MODE_MAP).fillna("Unknown")
 
-    print(f"[✓] Dataset loaded: {filepath}  ({len(df)} drives, {len(df.columns)} columns)")
+    print(f"[OK] Dataset loaded: {filepath}  ({len(df)} drives, {len(df.columns)} columns)")
     print(f"    Columns: {list(df.columns)}")
     return df
 

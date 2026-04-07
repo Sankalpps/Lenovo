@@ -263,7 +263,7 @@ elif page == "At-Risk Drives":
     fig = px.scatter(at_risk_df, x='health_score', y='failure_probability', 
                     title="Health Score vs Failure Risk",
                     labels={'health_score': 'Health Score', 'failure_probability': 'Failure Risk %'},
-                    color='failure_probability', color_continuous_scale='Red')
+                    color='failure_probability', color_continuous_scale='Reds')
     st.plotly_chart(fig, use_container_width=True)
 
 # ─── PAGE: MODEL PERFORMANCE ───────────────────────────────────────
@@ -308,7 +308,13 @@ elif page == "Model Performance":
         'Importance': importances
     }).sort_values('Importance', ascending=True)
     
-    fig = px.barh(feature_importance_df, x='Importance', y='Feature', title="Feature Importance Ranking")
+    fig = px.bar(
+        feature_importance_df,
+        x='Importance',
+        y='Feature',
+        orientation='h',
+        title="Feature Importance Ranking"
+    )
     st.plotly_chart(fig, use_container_width=True)
 
 # ─── PAGE: VISUALIZATIONS ─────────────────────────────────────────
