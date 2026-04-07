@@ -322,20 +322,45 @@ elif page == "Visualizations":
     st.header("📊 Generated Visualizations")
     
     output_dir = Path("output")
-    
-    if output_dir.exists():
-        png_files = sorted(list(output_dir.glob("*.png")))
-        
-        if png_files:
-            cols = st.columns(2)
-            for i, png_file in enumerate(png_files):
-                with cols[i % 2]:
-                    st.image(str(png_file), use_column_width=True)
-                    st.caption(png_file.name)
-        else:
-            st.info("No visualizations found. Run main.py to generate them.")
+
+    png_files = sorted(list(output_dir.glob("*.png"))) if output_dir.exists() else []
+
+    if not png_files:
+        st.info("No visualization files found for this session.")
+
+        if st.button("🛠️ Generate Visualizations Now"):
+            try:
+                with st.spinner("Generating visualizations from current data..."):
+                    from sklearn.metrics import confusion_matrix
+                    from eda_analysis import compute_correlation_matrix
+                    from visualization import generate_all_visualizations
+
+                    y_pred = model.predict(X_test)
+                    cm = confusion_matrix(y_test, y_pred)
+                    corr_matrix = compute_correlation_matrix(df)
+                    importance_df = pd.DataFrame({
+                        "feature": features,
+                        "importance": model.feature_importances_,
+                    }).sort_values("importance", ascending=False).reset_index(drop=True)
+
+                    generate_all_visualizations(
+                        df=df,
+                        results_df=health_scores,
+                        corr_matrix=corr_matrix,
+                        importance_df=importance_df,
+                        confusion_mat=cm,
+                    )
+
+                st.success("Visualizations generated in output/.")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Could not generate visualizations: {exc}")
     else:
-        st.warning("Output directory not found. Run main.py first.")
+        cols = st.columns(2)
+        for i, png_file in enumerate(png_files):
+            with cols[i % 2]:
+                st.image(str(png_file), use_column_width=True)
+                st.caption(png_file.name)
 
 # ─── PAGE: DATASET EXPLORER ────────────────────────────────────────
 elif page == "Dataset Explorer":
